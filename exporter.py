@@ -13,7 +13,7 @@ verbose = True
 
 
 def export_svgs_for_android(inkscape_path, input_dir, output_dir,
-                            is_drawable, width_dp, height_dp):
+                            is_drawable, width_dp, height_dp, export_area):
     """Export all svg files to png files for Android.
 
     Args:
@@ -30,6 +30,8 @@ def export_svgs_for_android(inkscape_path, input_dir, output_dir,
             If None, the blanket option will not be used; instead, each svg's
             document page width value will be used as the dp value.
         height_dp (int or None): Same as width_dp, but for height instead.
+        export_area (str or None): Area to export with format x0:y0:x1:y1. 
+            Whole page is exported if export_area is None.
     """
     android_helper.make_density_dirs(output_dir, is_drawable)
 
@@ -45,33 +47,47 @@ def export_svgs_for_android(inkscape_path, input_dir, output_dir,
                                     get_svg_name(svg_path))
 
             export(inkscape_path, svg_path, png_path,
-                   widths[i], heights[i])
+                   widths[i], heights[i], None, export_area)
 
 
-def export_svgs(inkscape_path, input_dir, output_dir, width_px, height_px):
+def export_svgs(inkscape_path, input_dir, input_file, output_dir, width_px, height_px, dpi, export_area):
     """Export all svg files to png files.
 
     Args:
         inkscape_path (str): File path to the Inkscape program.
         input_dir (str): Path to the input directory containing svgs.
+        input_file (str): Path to file containing svg paths relative to 
+            input_dir. If this is set svgs are taken from this file
+            instead of from the input_dir
         output_dir (str): Path to the output directory.
         width_px (int or None): A blanket option to specify the width of all
             output pngs in pixels. If None, the blanket option will not be
             used; instead, each svg's document page width value will be used.
         height_px (int or None): Same as width_px, but for height instead.
+        dpi (int or None): Set the DPI of exported PNG. Overrides width and height.
+        export_area (str or None): Area to export with format x0:y0:x1:y1. 
+            Whole page is exported if export_area is None.
     """
-    for svg_path in get_svg_paths(input_dir):
+    for svg_path in get_svg_paths(input_dir, input_file):
         width = get_width(svg_path) if width_px is None else width_px
         height = get_height(svg_path) if height_px is None else height_px
         png_path = get_png_path(output_dir, get_svg_name(svg_path))
-        export(inkscape_path, svg_path, png_path, width, height)
+        export(inkscape_path, svg_path, png_path, width, height, dpi, export_area)
 
 
-def get_svg_paths(dir_containing_svgs):
+def get_svg_paths(input_dir, input_file):
     svg_paths = []
-    for file_ in os.listdir(dir_containing_svgs):
+    lines = []
+    
+    if input_file:
+        with open(input_file) as f:
+            lines = [line.strip() for line in f]
+    else:
+        lines = os.listdir(input_dir)
+
+    for file_ in lines:
         if file_.endswith(".svg"):
-            svg_paths.append(dir_containing_svgs + os.path.sep + file_)
+            svg_paths.append(input_dir + os.path.sep + file_)
     if len(svg_paths) == 0:
         print "No svgs found!"
     return svg_paths
@@ -117,9 +133,9 @@ def get_png_path(output_dir, png_name):
     return output_dir + os.path.sep + png_name + ".png"
 
 
-def export(inkscape_path, svg_path, png_path, width_px, height_px):
+def export(inkscape_path, svg_path, png_path, width_px, height_px, dpi, export_area):
     execute(build_command_list(inkscape_path, svg_path,
-                               png_path, width_px, height_px))
+                               png_path, width_px, height_px, dpi, export_area))
 
 
 def execute(shell_command_as_list):
@@ -128,17 +144,22 @@ def execute(shell_command_as_list):
         print shell_output
 
 
-def build_command_list(inkscape_path, svg_path, png_path, width_px, height_px):
+def build_command_list(inkscape_path, svg_path, png_path, width_px, height_px, dpi, export_area):
     """Build a list of shell commands needed to export an Inkscape svg."""
     # For more params, see https://inkscape.org/en/doc/inkscape-man.html
     shell_command_as_list = [
         inkscape_path,
         "--without-gui",
-        "--export-area-page",
-        "--export-png=%s" % png_path,
-        "--export-width=%d" % width_px,  # Floats not supported.
-        "--export-height=%d" % height_px,  # Floats not supported.
-        svg_path]
+        "--export-area=%s" % export_area if export_area else "--export-area-page",
+        "--export-png=%s" % png_path]
+
+    if dpi:
+        shell_command_as_list.append("--export-dpi=%d" % dpi)
+    else:
+        shell_command_as_list.append("--export-width=%d" % width_px) # Floats not supported.
+        shell_command_as_list.append("--export-height=%d" % height_px) # Floats not supported.
+
+    shell_command_as_list.append(svg_path)
 
     return shell_command_as_list
 
@@ -195,6 +216,11 @@ if __name__ == "__main__":
                         help="path to the dir containing your svg(s), " +
                         "defaults to %s" % default_input_dir,
                         default=default_input_dir)
+    
+    parser.add_argument("-f", dest="input_file",
+                        help="path to input file - file should contain one svg path " + 
+                        "per line relative to input directory specified with -i",
+                        default=None)
 
     parser.add_argument("-o", dest="output_dir",
                         help="path to the dir that will contain the output, " +
@@ -210,6 +236,14 @@ if __name__ == "__main__":
 
     parser.add_argument("-height", dest="height", type=int,
                         help="same as width, but for height instead",
+                        default=None)
+
+    parser.add_argument("-dpi", dest="dpi", type=int,
+                        help="specify export DPI",
+                        default=None)
+    
+    parser.add_argument("-area", dest="export_area",
+                        help="specify output area with format x0:y0:x1:y1",
                         default=None)
 
     parser.add_argument("-a", dest="is_android",
@@ -242,8 +276,8 @@ if __name__ == "__main__":
         export_svgs_for_android(args.inkscape_path,
                                 args.input_dir, args.output_dir,
                                 str_to_bool(args.is_drawable),
-                                args.width, args.height)
+                                args.width, args.height, args.export_area)
     else:
         export_svgs(args.inkscape_path,
-                    args.input_dir, args.output_dir,
-                    args.width, args.height)
+                    args.input_dir, args.input_file, args.output_dir,
+                    args.width, args.height, args.dpi, args.export_area)
